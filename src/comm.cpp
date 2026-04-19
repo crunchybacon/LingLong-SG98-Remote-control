@@ -31,7 +31,9 @@ void comm_init() {
 }
 
 bool writeConfirm(uint16_t reg_addr, uint16_t value) { 
-  while(millis() - lastSend < COMM_DELAY_SEND);
+  while(millis() - lastSend < COMM_DELAY_SEND) {
+    yield();
+  }
   writeSingleRegister(reg_addr, value);
   delay(COMM_DELAY_RECEIVE + 1);
   bool response = false;
@@ -41,7 +43,9 @@ bool writeConfirm(uint16_t reg_addr, uint16_t value) {
 }
 
 bool writeMultipleConfirm(uint16_t reg_addr_start, uint16_t reg_count, uint16_t data1, uint16_t data2, uint16_t data3, uint16_t data4) { 
-  while(millis() - lastSend < COMM_DELAY_SEND);
+  while(millis() - lastSend < COMM_DELAY_SEND) {
+    yield();
+  }
   writeMultipleRegisters(reg_addr_start, reg_count, data1, data2, data3, data4);
   delay(COMM_DELAY_RECEIVE + 1);
   bool response = false;
@@ -54,12 +58,16 @@ bool writeMultipleConfirm(uint16_t reg_addr_start, uint16_t reg_count, uint16_t 
 }
 
 int16_t readReturn(uint16_t reg_addr, uint16_t reg_count) { //returns 0xFFFF if unsuccesfull, otherwise returns read value of first reg_addr
-  while(millis() - lastSend < COMM_DELAY_SEND);
+  while(millis() - lastSend < COMM_DELAY_SEND) {
+    yield();
+  }
   readRegister(reg_addr, reg_count); //Send read request
   #ifdef DEBUG_COMM
     Serial.print("requesting: "), Serial.println(reg_addr);
   #endif
-  while(millis() - lastSend < COMM_DELAY_RECEIVE);
+  while(millis() - lastSend < COMM_DELAY_RECEIVE) {
+    yield();
+  }
   if(receive() == reg_addr) { 
     #ifdef DEBUG_COMM
     Serial.print("Readreturn, lastRead0: "), Serial.println(lastRead[0]);
@@ -172,8 +180,8 @@ bool receiveError(uint8_t msgLength) {
 int16_t receive() {  // Returns 0 when nothing is read. returns the read register when succesfull receive(). 
   if(lastSend + COMM_DELAY_RECEIVE > millis()) return 0; //exit if not expecting a complete message yet, faster and safer than checking serial.available();
 
-  int len;
-  len = Serial2.available();
+  int len = Serial2.available();
+  if (len > (int)sizeof(response)) len = sizeof(response);
 
   Serial2.readBytes(response, len);
   memset(lastRead, 0, sizeof(lastRead));
