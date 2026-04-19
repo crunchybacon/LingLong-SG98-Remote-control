@@ -345,7 +345,7 @@ void drawIdleScreen() {
     tft->setFont(&FreeSans9pt7b);
     tft->fillRect(22, 205, 111, 20, COLOR_CARD); // Clear status area in Drive card
     tft->setTextColor(getCommStatusColor(currentStatus));
-    tft->setCursor(25, 220);
+    tft->setCursor(30, 220);
     tft->print(newStatus);
     prevSysStatus = currentStatus;
   }
@@ -356,7 +356,7 @@ void drawIdleScreen() {
     tft->setFont(&FreeSans9pt7b);
     tft->fillRect(147, 205, 111, 20, COLOR_CARD); // Clear status area in Purge card
     tft->setTextColor(Menu2[AUTO_PURGE_ENABLED].value ? COLOR_GREEN : COLOR_TEXT_DIM);
-    tft->setCursor(150, 220);
+    tft->setCursor(155, 220);
     tft->print(purgeStatus);
     prevAutoPurge = Menu2[AUTO_PURGE_ENABLED].value;
   }
@@ -420,7 +420,7 @@ void drawGbWIdleScreen() {
     tft->setFont(&FreeSans9pt7b);
     tft->fillRect(147, 161, 111, 18, COLOR_CARD); // Shifted from 158 to 161
     tft->setTextColor(getCommStatusColor(currentStatus));
-    tft->setCursor(150, 176); // Shifted from 175 to 176
+    tft->setCursor(155, 176); // Shifted from 175 to 176
     tft->print(newStatus);
     prevSysStatus = currentStatus;
   }
@@ -431,7 +431,7 @@ void drawGbWIdleScreen() {
     tft->setFont(&FreeSans9pt7b);
     tft->fillRect(147, 206, 111, 18, COLOR_CARD); // Shifted from 203 to 206
     tft->setTextColor(getScaleStatusColor(scaleStatus));
-    tft->setCursor(150, 221); // Shifted from 220 to 221
+    tft->setCursor(155, 221); // Shifted from 220 to 221
     tft->print(newScaleText);
     prevScaleStatus = scaleStatus;
   }
@@ -549,7 +549,7 @@ void drawGrindingOrPurgingScreen() {
         
         const char* statusStr = (state == PURGING) ? "PURGING..." : getCommStatusText(currentStatus);
         tft->setTextColor((state == PURGING) ? COLOR_YELLOW : getCommStatusColor(currentStatus));
-        tft->setCursor(20, 210);
+        tft->setCursor(25, 210);
         tft->print(statusStr);
         
         prevSysStatus = currentStatus;
@@ -666,7 +666,7 @@ void drawGrindingGbwScreen() {
         snprintf(statusStr, sizeof(statusStr), "D: %s | S: %s", 
                 getCommStatusText(currentStatus), getScaleStatusText(scaleStatus));
         tft->setTextColor(ST77XX_WHITE);
-        tft->setCursor(20, 210);
+        tft->setCursor(25, 210);
         tft->print(statusStr);
         
         prevSysStatus = currentStatus;
