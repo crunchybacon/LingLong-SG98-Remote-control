@@ -343,7 +343,7 @@ void drawIdleScreen() {
   if (prevSysStatus != currentStatus) {
     const char* newStatus = getCommStatusText(currentStatus);
     tft->setFont(&FreeSans9pt7b);
-    tft->fillRect(22, 205, 111, 20, COLOR_CARD); // Clear status area in Drive card
+    tft->fillRect(30, 205, 90, 20, COLOR_CARD); // Clear status area in Drive card
     tft->setTextColor(getCommStatusColor(currentStatus));
     tft->setCursor(30, 220);
     tft->print(newStatus);
@@ -354,7 +354,7 @@ void drawIdleScreen() {
   if (prevAutoPurge != Menu2[AUTO_PURGE_ENABLED].value) {
     const char* purgeStatus = Menu2[AUTO_PURGE_ENABLED].value ? "Auto" : "Off";
     tft->setFont(&FreeSans9pt7b);
-    tft->fillRect(147, 205, 111, 20, COLOR_CARD); // Clear status area in Purge card
+    tft->fillRect(155, 205, 90, 20, COLOR_CARD); // Clear status area in Purge card
     tft->setTextColor(Menu2[AUTO_PURGE_ENABLED].value ? COLOR_GREEN : COLOR_TEXT_DIM);
     tft->setCursor(155, 220);
     tft->print(purgeStatus);
@@ -418,7 +418,7 @@ void drawGbWIdleScreen() {
   if (prevSysStatus != currentStatus) {
     const char* newStatus = getCommStatusText(currentStatus);
     tft->setFont(&FreeSans9pt7b);
-    tft->fillRect(147, 161, 111, 18, COLOR_CARD); // Shifted from 158 to 161
+    tft->fillRect(155, 161, 90, 18, COLOR_CARD); // Shifted from 158 to 161
     tft->setTextColor(getCommStatusColor(currentStatus));
     tft->setCursor(155, 176); // Shifted from 175 to 176
     tft->print(newStatus);
@@ -429,7 +429,7 @@ void drawGbWIdleScreen() {
   if (prevScaleStatus != scaleStatus) {
     const char* newScaleText = getScaleStatusText(scaleStatus);
     tft->setFont(&FreeSans9pt7b);
-    tft->fillRect(147, 206, 111, 18, COLOR_CARD); // Shifted from 203 to 206
+    tft->fillRect(155, 206, 90, 18, COLOR_CARD); // Shifted from 203 to 206
     tft->setTextColor(getScaleStatusColor(scaleStatus));
     tft->setCursor(155, 221); // Shifted from 220 to 221
     tft->print(newScaleText);
@@ -545,7 +545,7 @@ void drawGrindingOrPurgingScreen() {
     // --- Status Updates ---
     if (prevSysStatus != currentStatus || (state == PURGING && !prevPurgingDrawn)) {
         tft->setFont(&FreeSans9pt7b);
-        tft->fillRect(17, 195, 246, 20, COLOR_CARD);
+        tft->fillRect(25, 195, 220, 20, COLOR_CARD);
         
         const char* statusStr = (state == PURGING) ? "PURGING..." : getCommStatusText(currentStatus);
         tft->setTextColor((state == PURGING) ? COLOR_YELLOW : getCommStatusColor(currentStatus));
@@ -660,7 +660,7 @@ void drawGrindingGbwScreen() {
     // --- Status Updates ---
     if (prevSysStatus != currentStatus || prevScaleStatus != scaleStatus) {
         tft->setFont(&FreeSans9pt7b);
-        tft->fillRect(17, 195, 246, 20, COLOR_CARD);
+        tft->fillRect(25, 195, 220, 20, COLOR_CARD);
         
         char statusStr[32];
         snprintf(statusStr, sizeof(statusStr), "D: %s | S: %s", 
