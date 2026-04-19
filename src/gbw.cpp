@@ -156,10 +156,10 @@ void do_gbw() {
     }
     #endif
 
-    //reset route & start route
-    if(lastCall + 1000 < millis()) { //reset after last call 1000ms ago
+    // --- Reset Route (First call or timeout) ---
+    if(lastCall + GBW_RESET_DELAY < millis()) { 
         if(motor_setRPM != 0) motor_setRPM = 0;
-        //Set starting values properly
+        
         gbw_started = false;
         grindingComplete = false;
         slow_phase = false;
@@ -171,195 +171,143 @@ void do_gbw() {
         properShot = false;
         learned = false;
 
-        //Zero shot data
-        for(int i = 0; i < sizeof(_shot)/sizeof(_shot[0]); i++) { 
-            _shot[i].weight = 0;
-            _shot[i].time = 0;
-        }
+        memset(_shot, 0, sizeof(_shot));
 
-        //Get outta here if scale is not connected;
         if(scaleStatus != SCALE_CONNECTED) { 
             state = IDLE_GBW;
             error = 106;
             disp_updateRequired = true;
-            #ifdef DEBUG_GBW
-                Serial.println("Scale not connected!"); 
-            #endif
             return;
         }
 
-        //check tare
-        if(abs(currentWeight) > 100) { // we accept 100mg of deviation.. this is natural for the scale..
+        // --- Initial Tare Logic ---
+        if(abs(currentWeight) > GBW_TARE_THRESHOLD) { 
             scale.tare();
             tareTime = millis();
             gbw_started = false;
-            #ifdef DEBUG_GBW
-                Serial.println("Tare");
-            #endif
-
-        } else { //no tare needed
+        } else { 
             startOfShot = millis();
             last_shot_updated = 0;
             grindingComplete = false;
-            gbw_started = true; //coffee imminent
-            tareTime = millis(); //for safety?
-            #ifdef DEBUG_GBW
-                Serial.println("gbw started!");
-            #endif
+            gbw_started = true;
+            tareTime = millis();
             disp_updateRequired = true;
-        }
-    }
-
-//keep track of our shot
-static int32_t lastWeight;
-    if(grindingComplete == false) {
-        if(state == GRINDING_GBW && gbw_started == true && lastWeight != currentWeight) { 
-            lastWeight = currentWeight;
-            last_shot_updated++;
-            _shot[last_shot_updated].weight = abs(currentWeight);
-            _shot[last_shot_updated].time = millis() - startOfShot;
-            if(last_shot_updated >= sizeof(_shot)/sizeof(_shot[0])) last_shot_updated = 0;
-        }
-    } else { 
-        if(lastUpdate + 600 > millis()) { 
-            if(state == GRINDING_GBW && gbw_started == true && lastWeight != currentWeight) { 
-                lastWeight = currentWeight;
-                last_shot_updated++;
-                _shot[last_shot_updated].weight = abs(currentWeight);
-                _shot[last_shot_updated].time = millis() - startOfShot;
-                if(last_shot_updated >= sizeof(_shot)/sizeof(_shot[0])) last_shot_updated = 0;
-            }
         }
     }
 
     lastCall = millis();
 
-    //Tare route
-    if(gbw_started == false && tareTime + 2000 < millis()) {
-        if(abs(currentWeight) < 200) { 
+    // --- Data Recording ---
+    static int32_t lastWeight;
+    bool recordingAllowed = (state == GRINDING_GBW && gbw_started);
+    bool inCaptureWindow = (grindingComplete == false) || (lastUpdate + GBW_POST_GRIND_WINDOW > millis());
+
+    if(recordingAllowed && inCaptureWindow && lastWeight != currentWeight) {
+        lastWeight = currentWeight;
+        if (last_shot_updated < (sizeof(_shot)/sizeof(_shot[0])) - 1) {
+            last_shot_updated++;
+            _shot[last_shot_updated].weight = abs(currentWeight);
+            _shot[last_shot_updated].time = millis() - startOfShot;
+        }
+    }
+
+    // --- Delayed Start (Post-Tare) ---
+    if(gbw_started == false && tareTime + GBW_TARE_DELAY < millis()) {
+        if(abs(currentWeight) < GBW_STABLE_THRESHOLD) { 
             startOfShot = millis();
             last_shot_updated = 0;
             grindingComplete = false;
             gbw_started = true;
             disp_updateRequired = true;
-            #ifdef DEBUG_GBW
-                Serial.println("gbw started!");
-            #endif
             lastUpdate = millis();
-        } else { //TARE AGAIN IF NEEDED
+        } else { 
             scale.tare();
             tareTime = millis();
+        }
+    }
+
+    // --- Grinding Phase Control ---
+    if(gbw_started && !grindingComplete) {
+        // Normal Phase
+        if (!slow_phase && (millis() - startOfShot > Menu3[GBW_BUTTON_DELAY].value)) {
+            motor_setRPM = clamp_gbw_rpm(Menu3[GBW_RPM_SET].value);
+        }
+
+        // Slow Phase Check
+        if(Menu3[GBW_SLOW_MG].value > 0 && !slow_phase) {
+            if(abs(currentWeight) >= (setWeight - Menu3[GBW_SLOW_MG].value)) { 
+                motor_setRPM = clamp_gbw_rpm(min(Menu3[GBW_SLOW_RPM].value, Menu3[GBW_RPM_SET].value));
+                slow_phase = true;
+                slow_phase_at = millis() - startOfShot; 
+                disp_updateRequired = true;
+            }
+        }
+
+        // --- Stop Logic ---
+        // 1. Prediction Stop
+        if(gbw_predict() < 0) { 
+            grindingComplete = true;
+            motor_setRPM = 0;
+            lastUpdate = millis();
+            shotStopped = millis() - startOfShot;
+            properShot = true;
+            disp_updateRequired = true;
+        }
+        // 2. Backup Stop (Overshoot)
+        else if(abs(currentWeight) > (int32_t)setWeight + GBW_BACKUP_STOP_MG) { 
+            grindingComplete = true;
+            motor_setRPM = 0;
+            lastUpdate = millis();
+            shotStopped = millis() - startOfShot;
+            properShot = false;
+            disp_updateRequired = true;
+        }
+        // 3. Scale Lost Stop
+        else if(!scale.isConnected()) { 
+            motor_setRPM = 0;
+            grindingComplete = true;
             gbw_started = false;
-            #ifdef DEBUG_GBW
-                Serial.println("Tare");
-            #endif
+            state = IDLE_GBW;
+            error = 104;
+            disp_updateRequired = true;
+        }
+        // 4. Empty Hopper Detection
+        else if(millis() - startOfShot > GBW_EMPTY_TIMEOUT && abs(currentWeight) < GBW_STABLE_THRESHOLD) { 
+            motor_setRPM = 0;
+            gbw_started = false;
+            state = IDLE_GBW;
+            error = 105;
+            disp_updateRequired = true;
         }
     }
 
-    //Actually grinding! Menu5 = button swing delay
-    if(gbw_started == true && startOfShot + Menu3[GBW_BUTTON_DELAY].value < millis() && grindingComplete == false && slow_phase == false) { 
-        motor_setRPM = clamp_gbw_rpm(Menu3[GBW_RPM_SET].value); //This is the GBW set RPM in menu
-    }
+    // --- Post-Grind Learning & Reset ---
+    if(grindingComplete) { 
+        if(!learned && lastUpdate + GBW_LEARN_DELAY < millis()) { 
+            scale.startTimer(); // BEEP
+            delay(25);
+            scale.stopTimer(); 
+            if(motor_setRPM != 0) motorOff();
+            
+            if(properShot) gbw_learn();
+            
+            learned = true;
+            lastActivity = millis();
+        }
 
-    if(Menu3[GBW_SLOW_MG].value > 0) {
-        // Switch to slow phase if applicable
-        if(!slow_phase && (abs(currentWeight)) >= (setWeight - Menu3[GBW_SLOW_MG].value) && grindingComplete == false && gbw_started == true) { 
-            motor_setRPM = clamp_gbw_rpm(min(Menu3[GBW_SLOW_RPM].value, Menu3[GBW_RPM_SET].value));
-            slow_phase = true;
-            slow_phase_at = millis() - startOfShot; 
-            #ifdef DEBUG_GBW
-                Serial.print("slow phase..at: "), Serial.print(currentWeight), Serial.println("mg");
-            #endif
+        if(lastUpdate + 2000 < millis()) { 
+            state = IDLE_GBW;
+            disp_updateRequired = true;
+            grindingComplete = false;
+            gbw_started = false;
+            tareTime = 0;
         }
     }
 
-    //Completion route
-    if(gbw_predict() < 0 && grindingComplete == false && gbw_started == true) { 
-        grindingComplete = true;
-        motor_setRPM = 0;
-        lastUpdate = millis();
-        shotStopped = millis() - startOfShot;
-        #ifdef DEBUG_GBW
-            Serial.println("Grinding complete!");
-            Serial.print("weight: "), Serial.print(abs(currentWeight)), Serial.print(" time: "), Serial.println(millis()-startOfShot);
-        #endif
-        disp_updateRequired = true;
-        properShot = true;
-    }
-
-    //Backup completion route
-    if(abs(currentWeight) > setWeight + 1000 && motor_setRPM > 0 && startOfShot > 1000) { 
-        grindingComplete = true;
-        motor_setRPM = 0;
-        lastUpdate = millis();
-        shotStopped = millis() - startOfShot;
-        #ifdef DEBUG_GBW
-            Serial.println("Backup completion triggered.. bad!");
-            Serial.println(currentWeight);
-            Serial.println(setWeight);
-        #endif
-        properShot = false;
-        disp_updateRequired = true;
-    }
-
-    //Scale issues route
-    if(scale.isConnected() == false && grindingComplete == false) { 
-        #ifdef DEBUG_GBW
-            Serial.println("Scale issues..");
-        #endif
-        motor_setRPM = 0;
-        grindingComplete = true;
-        gbw_started = false;
-        state = IDLE_GBW;
-        error = 104;
-        disp_updateRequired = true;
-        properShot = false;
-    } 
-
-    //No grounds coming out after 3s, no beans?
-    if(startOfShot + 3000 < millis() && grindingComplete == false && gbw_started == true && abs(currentWeight) < 200) { 
-        motor_setRPM = 0;
-        grindingComplete = false;
-        gbw_started = false;
-        slow_phase = false;
-        properShot = false;
-        state = IDLE_GBW;
-        error = 105;
-        disp_updateRequired = true;
-    }
-
-    // Learn route
-    if(grindingComplete == true && lastUpdate + 1000 < millis() && learned == false) { 
-        scale.startTimer(); //BEEP!
-        delay(25);
-        scale.stopTimer(); 
-        if(motor_setRPM != 0) motorOff();
-        #ifdef DEBUG_GBW
-            Serial.println("learn!");
-        #endif
-        if(properShot) gbw_learn(); //only needs to run once
-        #ifdef DEBUG_GBW
-            Serial.println("return from learn..!");
-        #endif
-        learned = true;
-        lastActivity = millis();
-    }
-
-    if(grindingComplete == true && lastUpdate + 2000 < millis()) { 
-        state = IDLE_GBW;
-        disp_updateRequired = true;
-        grindingComplete = false;
-        gbw_started = false;
-        tareTime = 0;
-        slow_phase = false;
-        slow_phase_at = 0;
-        properShot = false;
-    }
-
-    // flash accordingly
-    if(gbw_started == false) ledAction(0);
-    if(gbw_started == true && grindingComplete == false) ledAction(100 + 50.f*(float(currentWeight)/float(setWeight)));
-    else if(grindingComplete == true) ledAction(1);
+    // --- LED Feedback ---
+    if(!gbw_started) ledAction(0);
+    else if(!grindingComplete) ledAction(100 + 50.f*(float(currentWeight)/float(setWeight)));
+    else ledAction(1);
 }
 
 
@@ -380,7 +328,7 @@ static float gbw_liveRateMgPerMs(uint16_t windowSize = 6, uint16_t reference = l
     // where x = time, y = weight
     float sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
     
-    for (uint16_t i = oldIdx; i < reference; i++) {
+    for (uint16_t i = oldIdx; i <= reference; i++) {
         float x = _shot[i].time;
         float y = _shot[i].weight;
         sumX += x;
@@ -389,13 +337,13 @@ static float gbw_liveRateMgPerMs(uint16_t windowSize = 6, uint16_t reference = l
         sumX2 += x * x;
     }
     
-    float n = numPoints;
+    float n = numPoints + 1; // Since we include reference
     float denom = (n * sumX2 - sumX * sumX);
     
-    if (denom == 0) return 0;  // All points identical in time
+    if (abs(denom) < 0.001f) return 0;  // All points identical in time
     
     float slope = (n * sumXY - sumX * sumY) / denom;
-    if(slope > 20) slope = 20; //simple solution to noisy data at the start
+    if(slope > GBW_MAX_GRIND_RATE) slope = GBW_MAX_GRIND_RATE; 
 
     return slope;  // mg per ms
 }
@@ -408,7 +356,7 @@ int32_t gbw_predict() {
     static unsigned long lastPredictionAt;
     speedModifier = Menu3[GBW_SPEEDMOD].value / 10000.0f;
 
-    if(lastCall + 1000 < millis()) { 
+    if(lastCall + GBW_RESET_DELAY < millis()) { 
         lastActualPrediction = 5000;
         lastPredictionAt = millis();
         predictedTime = 5000;
@@ -422,11 +370,15 @@ int32_t gbw_predict() {
             // Use the most recent shot samples to estimate current grind speed.
             float speed = gbw_liveRateMgPerMs(6, last_shot_updated);
             float stillToGrind = float(setWeight) - float(abs(currentWeight));
+            
+            float fallbackSpeed = ((Menu3[GBW_SPEEDMOD].value/10000.f) * (clamp_gbw_rpm(Menu3[GBW_RPM_SET].value) / 60.f));
 
-            if(speed > 0.0f && speed < 20.0f) {
+            if(speed > 0.0f && speed < GBW_MAX_GRIND_RATE) {
                 predictedTime = (int32_t)(stillToGrind / speed);
-            } else { 
-                predictedTime =  (int32_t)(stillToGrind / ((Menu3[GBW_SPEEDMOD].value/10000.f) * (clamp_gbw_rpm(Menu3[GBW_RPM_SET].value) / 60.f)));
+            } else if (fallbackSpeed > 0.001f) { 
+                predictedTime =  (int32_t)(stillToGrind / fallbackSpeed);
+            } else {
+                predictedTime = 5000;
             }
 
             lastPredictionAt = millis();
@@ -447,135 +399,98 @@ int32_t gbw_predict() {
 
 
 void gbw_learn() { 
-    int overshoot = int(currentWeight) - int(setWeight);
-    uint32_t stopWeight;
-    float stopSpeed;
+    int32_t overshoot = (int32_t)currentWeight - (int32_t)setWeight;
+    uint32_t stopWeight = 0;
+    float stopSpeed = 0;
     bool isProper = true;
-    int16_t newOffset = Menu3[GBW_OFFSET].value;
-    uint16_t firstVal = 0;
-    uint16_t secondVal = 0;
+    uint16_t firstValIdx = 0;
+    uint16_t secondValIdx = 0;
 
-
-    //estimate weight at stoptime
-    for(int i = 0; i < last_shot_updated; i++) { 
-        if(_shot[i].time > shotStopped) {
-            uint16_t delta = _shot[i].time - _shot[i-1].time;
-            uint16_t point = shotStopped - _shot[i-1].time;
-            float progression = float(point) / (float)delta;
-
-            #ifdef DEBUG_GBW
-                Serial.print("delta .. point .. progression: "), Serial.print(delta), Serial.print(" "), Serial.print(point), Serial.print(" "), Serial.println(progression);
-            #endif
-            
-            stopWeight = _shot[i-1].weight + progression * (_shot[i].weight - _shot[i-1].weight);
-            stopSpeed = gbw_liveRateMgPerMs(4, i);
-
+    // --- 1. Estimate Weight and Speed at the exact moment the motor stopped ---
+    for (int i = 1; i <= last_shot_updated; i++) { 
+        if (_shot[i].time > shotStopped) {
+            uint32_t dt = _shot[i].time - _shot[i-1].time;
+            if (dt == 0) continue;
+            float progress = (float)(shotStopped - _shot[i-1].time) / (float)dt;
+            stopWeight = _shot[i-1].weight + progress * (float)(_shot[i].weight - _shot[i-1].weight);
+            stopSpeed = gbw_liveRateMgPerMs(6, i); // Speed just before stopping
             break;
         }
     }
 
-    #ifdef DEBUG_GBW
-        Serial.print("last shot updated idx: "), Serial.println(last_shot_updated);
-        Serial.print("final weight: "), Serial.println(currentWeight);
-        Serial.print("target weight: "), Serial.println(setWeight);
-        Serial.print("grinding duration: "), Serial.print(shotStopped), Serial.println("ms");
-        Serial.print("grinding stopped estimation: "), Serial.print(stopWeight), Serial.println("mg");
-        Serial.print("speed at stopping mg/ms: "), Serial.println(stopSpeed);
-        Serial.print("overshoot: "), Serial.println(overshoot);
+    if (stopWeight == 0 || stopSpeed <= 0.05f) isProper = false;
 
-        Serial.println(""), Serial.println("datapoints:");
-        for(int i = 0; i < last_shot_updated; i++) { 
-            Serial.print("idx: ");
-            Serial.print(i);
-            Serial.print("  weight: ");
-            Serial.print(_shot[i].weight);
-            Serial.print(" time: ");
-            Serial.println(_shot[i].time);
-            if(_shot[i].time < shotStopped && _shot[i+1].time > shotStopped) Serial.println("-- END OF GRINDING --");
-        }
-    #endif
-    
-    // Lookup the BULK grinding speed with time between 2 and 10g 
-    for(int i = 0; i < last_shot_updated; ++i) {
-        if(_shot[i].weight > 2000 && firstVal == 0) {
-            firstVal = i;
-        }
-        if(_shot[i].weight > 10000 && secondVal == 0) {
-            secondVal = i;
-        }
-        if(firstVal != 0 && secondVal != 0) {
-            break;
-        }
+    // --- 2. Calculate Bulk Grind Speed (20% to 80% of Target Weight) ---
+    uint32_t minWeight = setWeight * 0.2f;
+    uint32_t maxWeight = setWeight * 0.8f;
+
+    for (int i = 0; i <= last_shot_updated; i++) {
+        if (_shot[i].weight > minWeight && firstValIdx == 0) firstValIdx = i;
+        if (_shot[i].weight > maxWeight && secondValIdx == 0) secondValIdx = i;
     }
 
-    int16_t test_weight_diff = _shot[secondVal].weight - _shot[firstVal].weight;
-    uint32_t test_time_diff = _shot[secondVal].time - _shot[firstVal].time;
 
+    if (firstValIdx != 0 && secondValIdx != 0 && secondValIdx > firstValIdx) {
+        int32_t dw = _shot[secondValIdx].weight - _shot[firstValIdx].weight;
+        uint32_t dt = _shot[secondValIdx].time - _shot[firstValIdx].time;
+
+        if (dt > 200 && dw > 500) { // Need at least 200ms and 0.5g of data
+            float currentGrindSpeed = (float)dw / (float)dt;
+            float rpm = clamp_gbw_rpm(Menu3[GBW_RPM_SET].value);
+            if (rpm > 0) {
+                float newGroundPerRot = currentGrindSpeed / (rpm / 60.0f);
+                
+                // --- Alpha Filtering for Speed Modifier ---
+                float oldGPR = Menu3[GBW_SPEEDMOD].value / 10000.0f;
+                // Initialize if it was default 0.5f (or very different)
+                if (abs(newGroundPerRot - oldGPR) > 0.5f) speedModifier = newGroundPerRot;
+                else speedModifier = (oldGPR * (1.0f - GBW_LEARN_ALPHA)) + (newGroundPerRot * GBW_LEARN_ALPHA);
+                
+                // Outlier Rejection: Speed shouldn't be crazy
+                if (speedModifier < 0.03f || speedModifier > 0.8f) isProper = false;
+            } else isProper = false;
+        } else isProper = false;
+    } else isProper = false;
+
+    // --- 3. Calculate Ideal Offset ---
+    // The offset is the time required for the "fallout" (weight that falls after stop)
+    // Fallout = currentWeight - stopWeight
+    int16_t currentOffset = Menu3[GBW_OFFSET].value;
+    int32_t actualFallout = (int32_t)currentWeight - (int32_t)stopWeight;
     
- 
-    float grindSpeed = test_weight_diff / float(test_time_diff);
-    float rpm = clamp_gbw_rpm(Menu3[GBW_RPM_SET].value);
+    // Ideal Offset = actualFallout / stopSpeed + correction for overshoot
+    if (isProper && stopSpeed > 0.05f && actualFallout > 0) {
+        float timeToFall = (float)actualFallout / stopSpeed;
+        float errorTime = (float)overshoot / stopSpeed;
+        
+        // We want: StopTime = TargetTime - Offset
+        // If we overshot by errorTime, our offset was too small.
+        int16_t idealOffset = (int16_t)(timeToFall + (errorTime * 0.25f)); // P-correction (25%)
+        
+        // Clamp and Filter Offset
+        if (idealOffset < GBW_MIN_OFFSET) idealOffset = GBW_MIN_OFFSET;
+        if (idealOffset > GBW_MAX_OFFSET) idealOffset = GBW_MAX_OFFSET;
+        
+        int16_t delta = idealOffset - currentOffset;
+        if (abs(delta) > GBW_MAX_OFFSET_CHANGE) {
+            delta = (delta > 0) ? GBW_MAX_OFFSET_CHANGE : -GBW_MAX_OFFSET_CHANGE;
+        }
+        
+        // Apply alpha filter to offset
+        int16_t newOffset = currentOffset + (int16_t)(delta * GBW_LEARN_ALPHA);
+        if (abs(overshoot) < 100) newOffset = currentOffset; // Deadzone for stability
 
-    if (rpm == 0) return; // Prevent division by zero
-    float ground_per_rotation = grindSpeed / (rpm / 60.f); // g/s / rot/s = g * rot
-
-    if(Menu3[GBW_OFFSET].value <= 0) {
-        return;
-    }
-
-    if(speedModifier != 0.5f) speedModifier = (ground_per_rotation + speedModifier) / 2.0f;
-    else speedModifier = ground_per_rotation;
-
-
-    #ifdef DEBUG_GBW
-        Serial.print("Old speedmodifier: ");
-        Serial.print(Menu3[GBW_SPEEDMOD].value);
-        Serial.print("  New speedmod: ");
-        Serial.println(speedModifier*10000);
-    #endif
-
-    // Calculating expected stop time
-    int16_t actualDeltaWeight = _shot[last_shot_updated].weight - stopWeight; 
-    float endingSpeed = float(actualDeltaWeight) / float(Menu3[GBW_OFFSET].value);
-    int16_t grindOvershoot = setWeight - stopWeight; 
-
-    int16_t idealOffset = (actualDeltaWeight / endingSpeed) + (overshoot/endingSpeed)/4.f;
-
-    if(overshoot > 0 && idealOffset > Menu3[GBW_OFFSET].value) newOffset = (Menu3[GBW_OFFSET].value + idealOffset)/2;
-    if(overshoot < 0 && idealOffset < Menu3[GBW_OFFSET].value) newOffset = (Menu3[GBW_OFFSET].value + idealOffset)/2;
-    if(abs(overshoot) < 100) newOffset = Menu3[GBW_OFFSET].value;
-
-    //Decide if proper!
-    if(idealOffset < 50 || idealOffset > 500) isProper = false;
-    if(abs(overshoot) > 5000) isProper = false;
-    if (test_time_diff < 600) isProper = false; // It's not a proper shot.
-    if(firstVal == 0 || secondVal == 0) isProper = false; //not a proper shot
-    if (test_time_diff == 0) isProper = false; // Prevent division by zero
-    if(speedModifier < 0.03f || speedModifier > 0.8f) isProper = false;
- 
-
-    #ifdef DEBUG_GBW
-        Serial.print("Actual delta weight: "), Serial.println(actualDeltaWeight);
-        Serial.print("endingSpeed: "), Serial.println(endingSpeed);
-        Serial.print("live calc ending Speed: "), Serial.println(stopSpeed);
-        Serial.print("idealOffset: "), Serial.println(idealOffset);
-        Serial.print("last offset: "), Serial.println(Menu3[GBW_OFFSET].value);
-    #endif
-
-    if(isProper == true) { 
-        #ifdef DEBUG_GBW
-            Serial.println("Proper shot! saving values!");
-        #endif
-        Menu3[GBW_SPEEDMOD].value = speedModifier * 10000;
         Menu3[GBW_OFFSET].value = newOffset;
-        pdata_write(4);
-    } else { 
+        Menu3[GBW_SPEEDMOD].value = (uint16_t)(speedModifier * 10000);
+        
         #ifdef DEBUG_GBW
-            Serial.println("Not a proper shot.. deleting calculated values..");
-            Serial.print("Calculated speedmod: ");
-            Serial.println(speedModifier, 3);
-            Serial.print("Calculated new Offset: ");
-            Serial.println(newOffset);
+            Serial.print("Proper shot! New speedmod: "), Serial.print(speedModifier, 4);
+            Serial.print(" New offset: "), Serial.println(newOffset);
+        #endif
+        pdata_write(4);
+    } else {
+        #ifdef DEBUG_GBW
+            Serial.println("Learning rejected: Outlier or unstable data.");
         #endif
     }
 }

@@ -133,3 +133,18 @@
 #define default_reverseRotation 0
 #define default_purgeStabilTime 500
 #define default_purge_off_time 1000
+
+// GBW CONSTANTS
+#define GBW_TARE_THRESHOLD 100      // mg
+#define GBW_STABLE_THRESHOLD 200    // mg
+#define GBW_TARE_DELAY 2000         // ms
+#define GBW_EMPTY_TIMEOUT 3000      // ms
+#define GBW_LEARN_DELAY 1000        // ms
+#define GBW_RESET_DELAY 1000        // ms
+#define GBW_POST_GRIND_WINDOW 600   // ms
+#define GBW_BACKUP_STOP_MG 1000     // mg
+#define GBW_MAX_GRIND_RATE 20       // mg/ms
+#define GBW_LEARN_ALPHA 0.2f        // 20% new data, 80% old data
+#define GBW_MAX_OFFSET_CHANGE 100   // ms max change per shot
+#define GBW_MIN_OFFSET 50           // ms
+#define GBW_MAX_OFFSET 500          // ms
